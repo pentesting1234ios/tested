@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Comma4Pro HUD</title>
+<style>
+  body {
+    margin: 0;
+    background: #000;
+    color: #00ff66;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro", monospace;
+    overflow: hidden;
+  }
+  #c {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100vw;
+    height: 100vh;
+  }
+  .mph {
+    position: absolute;
+    top: 38%;
+    width: 100%;
+    text-align: center;
+    font-size: 56px; /* balanced */
+    font-weight: 700;
+    color: #00ff66;
+    text-shadow: 0 0 18px #00ff66;
+  }
+  .time {
+    position: absolute;
+    top: 16px;
+    right: 18px;
+    font-size: 18px;
+    opacity: 0.85;
+  }
+  .weather {
+    position: absolute;
+    top: 16px;
+    left: 18px;
+    font-size: 16px;
+    opacity: 0.9;
+  }
+  .debug {
+    position: absolute;
+    bottom: 18px;
+    left: 18px;
+    font-size: 13px;
+    line-height: 1.35em;
+    opacity: 0.9;
+    white-space: pre;
+  }
+  #wheel {
+    position: absolute;
+    top: 55%;
+    left: 50%;
+    transform: translateX(-50%) rotate(0deg);
+    font-size: 42px;
+    color: #00ff66;
+    opacity: 0.85;
+    text-shadow: 0 0 12px #00ff66;
+    transition: transform 0.08s linear;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div class="mph" id="mph">0</div>
+<div id="wheel">â³</div>
+<div class="time" id="time">--:--</div>
+<div class="weather" id="weather">--Â°C â¢ --</div>
+
+<div class="debug" id="debug">
+lat: --
+lon: --
+head: --
+acc: x0.00 y0.00 z0.00
+gyr: a0.0 b0.0 g0.0
+</div>
+
+<script>
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const wheel = document.getElementById("wheel");
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener("resize", resize);
+
+// stable Comma-style lanes
+function drawLanes() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.strokeStyle = "#00ff66";
+  ctx.lineWidth = 5;
+  ctx.lineCap = "round";
+
+  const midY = canvas.height * 0.52;
+  const bottomY = canvas.height * 1.02;
+
+  ctx.beginPath();
+  ctx.moveTo(canvas.width * 0.32, bottomY);
+  ctx.lineTo(canvas.width * 0.47, midY);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(canvas.width * 0.68, bottomY);
+  ctx.lineTo(canvas.width * 0.53, midY);
+  ctx.stroke();
+
+  requestAnimationFrame(drawLanes);
+}
+drawLanes();
+
+// time
+setInterval(() => {
+  const d = new Date();
+  const h = String(d.getHours()).padStart(2,"0");
+  const m = String(d.getMinutes()).padStart(2,"0");
+  document.getElementById("time").textContent = `${h}:${m}`;
+}, 1000);
+
+// debug state
+let dbg = {
+  lat: "--",
+  lon: "--",
+  head: "--",
+  ax: "0.00",
+  ay: "0.00",
+  az: "0.00",
+  ga: "0.0",
+  gb: "0.0",
+  gg: "0.0"
+};
+
+function updateDebug() {
+  document.getElementById("debug").textContent =
+`lat: ${dbg.lat}
+lon: ${dbg.lon}
+head: ${dbg.head}
+acc: x${dbg.ax} y${dbg.ay} z${dbg.az}
+gyr: a${dbg.ga} b${dbg.gb} g${dbg.gg}`;
+}
+
+// GPS + weather (GPS-based)
+navigator.geolocation.watchPosition(pos => {
+  const spd = pos.coords.speed || 0; // m/s
+  const mph = spd * 2.23694;
+  document.getElementById("mph").textContent = Math.round(mph);
+
+  const lat = pos.coords.latitude;
+  const lon = pos.coords.longitude;
+  const head = pos.coords.heading != null ? Math.round(pos.coords.heading) : "--";
+
+  dbg.lat = lat.toFixed(5);
+  dbg.lon = lon.toFixed(5);
+  dbg.head = head;
+  updateDebug();
+
+  fetchWeather(lat, lon);
+}, err => {
+  console.log("GPS error", err);
+});
+
+// motion sensors
+window.addEventListener("devicemotion", e => {
+  const a = e.accelerationIncludingGravity || {};
+  dbg.ax = (a.x ?? 0).toFixed(2);
+  dbg.ay = (a.y ?? 0).toFixed(2);
+  dbg.az = (a.z ?? 0).toFixed(2);
+  updateDebug();
+});
+
+window.addEventListener("deviceorientation", e => {
+  dbg.ga = (e.alpha ?? 0).toFixed(1);
+  dbg.gb = (e.beta ?? 0).toFixed(1);
+  dbg.gg = (e.gamma ?? 0).toFixed(1);
+  updateDebug();
+
+  // OP-style steering wheel: real yaw-based
+  const yaw = e.gamma || 0;      // left/right tilt
+  const angle = yaw * 1.5;       // sensitivity
+  wheel.style.transform = `translateX(-50%) rotate(${angle}deg)`;
+});
+
+// GPS-based weather
+let lastWeatherTs = 0;
+async function fetchWeather(lat, lon) {
+  const now = Date.now();
+  if (now - lastWeatherTs < 60000) return; // max 1 req/min
+  lastWeatherTs = now;
+
+  const key = "f044d692d8f59eff7287a503fdc40d5a";
+  const url =
+    `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}` +
+    `&units=metric&appid=${key}`;
+
+  try {
+    const r = await fetch(url);
+    const j = await r.json();
+    const temp = Math.round(j.main.temp);
+    const cond = j.weather[0].main;
+    document.getElementById("weather").textContent = `${temp}Â°C â¢ ${cond}`;
+  } catch (e) {
+    document.getElementById("weather").textContent = "--Â°C â¢ --";
+  }
+}
+</script>
+</body>
+</html>
